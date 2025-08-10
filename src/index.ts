@@ -21,18 +21,32 @@ import {
   ListResourceTemplatesRequestSchema,
   PingRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { MongoClient, ReadPreference } from "mongodb";
-import { MongoCollection } from "./types.js";
+/**
+ * MongoDB module and connection references
+ */
+let MongoClient: any;
+let ReadPreference: any;
+let client: any = null;
+let db: any = null;
 
 /**
- * MongoDB connection client and database reference
+ * Initialize MongoDB module
  */
-let client: MongoClient | null = null;
-let db: any = null;
+async function initializeMongoDB() {
+  const mongodb = await import("mongodb");
+  const mongoModule = mongodb.default || mongodb;
+  MongoClient = mongoModule.MongoClient;
+  ReadPreference = mongoModule.ReadPreference;
+}
 /**
  * Flag indicating whether the connection is in read-only mode
  */
 let isReadOnlyMode = false;
+
+/**
+ * Initialize the MongoDB module on startup
+ */
+await initializeMongoDB();
 
 /**
  * Create an MCP server with capabilities for resources (to list/read collections),
@@ -57,16 +71,48 @@ const server = new Server(
  */
 async function connectToMongoDB(url: string, readOnly: boolean = false) {
   try {
-    const options = readOnly
-      ? { readPreference: ReadPreference.SECONDARY }
-      : {};
-    client = new MongoClient(url, options);
+    // Log connection details for debugging
+    console.error("MongoDB Connection Debug:");
+    console.error("- URL length:", url.length);
+    console.error("- URL starts with:", url.substring(0, 50) + "...");
+    console.error("- Contains %2C:", url.includes("%2C"));
+    console.error("- Contains comma:", url.includes(","));
+    
+    // Try to decode the URL if it contains encoded characters
+    let connectionUrl = url;
+    if (url.includes("%2C")) {
+      console.error("- Detected URL-encoded password, keeping as-is for MongoDB 3.6");
+    }
+    
+    const options: any = {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 10000 // 10 second timeout
+    };
+    
+    if (readOnly) {
+      options.readPreference = ReadPreference.SECONDARY;
+    }
+    
+    console.error("- Creating MongoClient...");
+    client = new MongoClient(connectionUrl, options);
+    
+    console.error("- Connecting to MongoDB...");
     await client.connect();
+    
+    console.error("- Connected successfully!");
     db = client.db();
     isReadOnlyMode = readOnly;
     return true;
   } catch (error) {
     console.error("Failed to connect to MongoDB:", error);
+    if (error instanceof Error) {
+      console.error("Error details:", {
+        name: error.name,
+        message: error.message,
+        stack: error.stack?.split('\n').slice(0, 5).join('\n')
+      });
+    }
     return false;
   }
 }
@@ -106,7 +152,7 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
   try {
     const collections = await db.listCollections().toArray();
     return {
-      resources: collections.map((collection: MongoCollection) => ({
+      resources: collections.map((collection: any) => ({
         uri: `mongodb:///${collection.name}`,
         mimeType: "application/json",
         name: collection.name,
@@ -137,23 +183,23 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     // Infer schema from sample document
     const schema = sample
       ? {
-          type: "collection",
-          name: collectionName,
-          fields: Object.entries(sample).map(([key, value]) => ({
-            name: key,
-            type: typeof value,
-          })),
-          indexes: indexes.map((idx: any) => ({
-            name: idx.name,
-            keys: idx.key,
-          })),
-        }
+        type: "collection",
+        name: collectionName,
+        fields: Object.entries(sample).map(([key, value]) => ({
+          name: key,
+          type: typeof value,
+        })),
+        indexes: indexes.map((idx: any) => ({
+          name: idx.name,
+          keys: idx.key,
+        })),
+      }
       : {
-          type: "collection",
-          name: collectionName,
-          fields: [],
-          indexes: [],
-        };
+        type: "collection",
+        name: collectionName,
+        fields: [],
+        indexes: [],
+      };
 
     return {
       contents: [
@@ -512,7 +558,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               projection,
               limit: limit || 100,
             })
-            .explain(explain);
+            .explain();
 
           return {
             content: [
@@ -567,12 +613,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (explain) {
           // Use explain for aggregation analysis
           const explainResult = await collection
-            .aggregate(pipeline, {
-              explain: {
-                verbosity: explain,
-              },
-            })
-            .toArray();
+            .aggregate(pipeline)
+            .explain();
 
           return {
             content: [
@@ -896,11 +938,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       try {
-        const result = await collection.createIndexes(indexes, {
-          writeConcern,
-          commitQuorum:
-            typeof commitQuorum === "number" ? commitQuorum : undefined,
-        });
+        // Create indexes one by one for MongoDB 3.x compatibility
+        const createdIndexes: any[] = [];
+        const numIndexesBefore = await collection.indexes().length;
+
+        for (const index of indexes) {
+          try {
+            await collection.createIndex(index.key, index.options);
+            createdIndexes.push(index.name || Object.keys(index.key).join('_'));
+          } catch (error) {
+            // Continue with other indexes if one fails
+            console.warn(`Failed to create index ${index.name}:`, error);
+          }
+        }
+
+        const numIndexesAfter = await collection.indexes().length;
+        const result = {
+          acknowledged: true,
+          createdIndexes,
+          numIndexesBefore,
+          numIndexesAfter,
+        };
 
         return {
           content: [
@@ -999,7 +1057,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         );
 
         // Execute count operation
-        const count = await collection.countDocuments(countQuery, options);
+        const count = await collection.count(countQuery, options);
 
         return {
           content: [
@@ -1209,22 +1267,61 @@ async function main() {
   let connectionUrl = "";
   let readOnlyMode = false;
 
+  // Check for environment variable first
+  if (process.env.MONGODB_URL || process.env.MONGODB_URI) {
+    connectionUrl = process.env.MONGODB_URL || process.env.MONGODB_URI || "";
+    console.error("Using connection URL from environment variable");
+  }
+
+  // Debug: Log raw arguments
+  console.error("Raw arguments:", args);
+  console.error("Number of arguments:", args.length);
+  console.error("Process argv:", process.argv);
+  
   // Parse command line arguments
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--read-only" || args[i] === "-r") {
+    const arg = args[i];
+    console.error(`Arg[${i}]:`, arg, "Type:", typeof arg);
+    
+    if (arg === "--read-only" || arg === "-r") {
       readOnlyMode = true;
-    } else if (!connectionUrl) {
-      connectionUrl = args[i];
+    } else if (!connectionUrl && arg) {
+      // Handle both string and object inputs
+      if (typeof arg === 'string' && arg.length > 0) {
+        connectionUrl = arg;
+      } else if (typeof arg === 'object' && arg !== null) {
+        // MCP might pass an object with the URL
+        console.error("Received object argument:", JSON.stringify(arg, null, 2));
+        // Try common property names
+        const anyArg = arg as any;
+        connectionUrl = anyArg.url || anyArg.connectionUrl || anyArg.connectionString || anyArg.uri || anyArg.value || String(arg);
+      }
     }
   }
 
-  if (!connectionUrl) {
+  // If still no URL and we have args, try to extract from the first non-flag argument
+  if (!connectionUrl && args.length > 0) {
+    for (const arg of args) {
+      if (typeof arg === 'string' && !arg.startsWith('-') && arg.includes('mongodb://')) {
+        connectionUrl = arg;
+        break;
+      }
+    }
+  }
+
+  if (!connectionUrl || typeof connectionUrl !== 'string' || connectionUrl === '[object Object]') {
     console.error(
-      "Please provide a MongoDB connection URL as a command-line argument",
+      "Please provide a MongoDB connection URL as a command-line argument or via MONGODB_URL/MONGODB_URI environment variable",
     );
     console.error("Usage: command <mongodb-url> [--read-only|-r]");
+    console.error("Received:", connectionUrl);
+    console.error("All args:", args);
     process.exit(1);
   }
+
+  console.error("Extracted connection URL:", connectionUrl);
+  console.error("Connection URL type:", typeof connectionUrl);
+  console.error("Read-only mode:", readOnlyMode);
 
   const connected = await connectToMongoDB(connectionUrl, readOnlyMode);
   if (!connected) {

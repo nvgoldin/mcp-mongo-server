@@ -7,7 +7,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 // MongoDB Collection Schema
-export const MongoCollectionSchema = ResourceSchema.extend({
+const MongoCollectionSchema = ResourceSchema.extend({
   collectionName: z.string(),
   databaseName: z.string(),
   indexes: z
@@ -21,17 +21,17 @@ export const MongoCollectionSchema = ResourceSchema.extend({
     .optional(),
 });
 
-export type MongoCollection = z.infer<typeof MongoCollectionSchema>;
+type MongoCollection = z.infer<typeof MongoCollectionSchema>;
 
 // MongoDB Document Schema
-export const MongoDocumentSchema = TextResourceContentsSchema.extend({
+const MongoDocumentSchema = TextResourceContentsSchema.extend({
   document: z.record(z.unknown()),
 });
 
-export type MongoDocument = z.infer<typeof MongoDocumentSchema>;
+type MongoDocument = z.infer<typeof MongoDocumentSchema>;
 
 // MongoDB Query Operators
-export const MongoQueryOperatorSchema = z.object({
+const MongoQueryOperatorSchema = z.object({
   $eq: z.unknown().optional(),
   $gt: z.unknown().optional(),
   $gte: z.unknown().optional(),
@@ -51,15 +51,15 @@ export const MongoQueryOperatorSchema = z.object({
   $options: z.string().optional(),
 });
 
-export type MongoQueryOperator = z.infer<typeof MongoQueryOperatorSchema>;
+type MongoQueryOperator = z.infer<typeof MongoQueryOperatorSchema>;
 
 // MongoDB Sort Options
-export const MongoSortSchema = z.record(z.union([z.literal(1), z.literal(-1)]));
+const MongoSortSchema = z.record(z.union([z.literal(1), z.literal(-1)]));
 
-export type MongoSort = z.infer<typeof MongoSortSchema>;
+type MongoSort = z.infer<typeof MongoSortSchema>;
 
 // MongoDB Query Tool Schema
-export const MongoQueryToolSchema = ToolSchema.extend({
+const MongoQueryToolSchema = ToolSchema.extend({
   inputSchema: z.object({
     type: z.literal("object"),
     properties: z
@@ -76,10 +76,10 @@ export const MongoQueryToolSchema = ToolSchema.extend({
   }),
 });
 
-export type MongoQueryTool = z.infer<typeof MongoQueryToolSchema>;
+type MongoQueryTool = z.infer<typeof MongoQueryToolSchema>;
 
 // MongoDB Aggregate Tool Schema
-export const MongoAggregateToolSchema = ToolSchema.extend({
+const MongoAggregateToolSchema = ToolSchema.extend({
   inputSchema: z.object({
     type: z.literal("object"),
     properties: z
@@ -92,10 +92,10 @@ export const MongoAggregateToolSchema = ToolSchema.extend({
   }),
 });
 
-export type MongoAggregateTool = z.infer<typeof MongoAggregateToolSchema>;
+type MongoAggregateTool = z.infer<typeof MongoAggregateToolSchema>;
 
 // MongoDB Count Tool Schema
-export const MongoCountToolSchema = ToolSchema.extend({
+const MongoCountToolSchema = ToolSchema.extend({
   inputSchema: z.object({
     type: z.literal("object"),
     properties: z
@@ -110,10 +110,10 @@ export const MongoCountToolSchema = ToolSchema.extend({
   }),
 });
 
-export type MongoCountTool = z.infer<typeof MongoCountToolSchema>;
+type MongoCountTool = z.infer<typeof MongoCountToolSchema>;
 
 // MongoDB Distinct Tool Schema
-export const MongoDistinctToolSchema = ToolSchema.extend({
+const MongoDistinctToolSchema = ToolSchema.extend({
   inputSchema: z.object({
     type: z.literal("object"),
     properties: z
@@ -129,10 +129,10 @@ export const MongoDistinctToolSchema = ToolSchema.extend({
   }),
 });
 
-export type MongoDistinctTool = z.infer<typeof MongoDistinctToolSchema>;
+type MongoDistinctTool = z.infer<typeof MongoDistinctToolSchema>;
 
 // MongoDB Call Tool Request Schema
-export const MongoCallToolRequestSchema = CallToolRequestSchema.extend({
+const MongoCallToolRequestSchema = CallToolRequestSchema.extend({
   params: z.object({
     name: z.enum([
       "query",
@@ -154,10 +154,10 @@ export const MongoCallToolRequestSchema = CallToolRequestSchema.extend({
   }),
 });
 
-export type MongoCallToolRequest = z.infer<typeof MongoCallToolRequestSchema>;
+type MongoCallToolRequest = z.infer<typeof MongoCallToolRequestSchema>;
 
 // MongoDB Error Types
-export const MongoErrorCodeSchema = z.enum([
+const MongoErrorCodeSchema = z.enum([
   "INVALID_QUERY",
   "COLLECTION_NOT_FOUND",
   "DATABASE_NOT_FOUND",
@@ -169,18 +169,27 @@ export const MongoErrorCodeSchema = z.enum([
   "UNAUTHORIZED",
 ]);
 
-export type MongoErrorCode = z.infer<typeof MongoErrorCodeSchema>;
+type MongoErrorCode = z.infer<typeof MongoErrorCodeSchema>;
 
-export const MongoErrorSchema = z.object({
+const MongoErrorSchema = z.object({
   code: MongoErrorCodeSchema,
   message: z.string(),
   details: z.unknown().optional(),
 });
 
-export type MongoError = z.infer<typeof MongoErrorSchema>;
+type MongoError = z.infer<typeof MongoErrorSchema>;
 
 // MongoDB Schema Inference Types
-export const MongoFieldSchemaSchema: z.ZodType<any> = z.object({
+interface MongoFieldSchema {
+  type: "string" | "number" | "boolean" | "date" | "objectId" | "array" | "object" | "null" | "mixed";
+  required?: boolean;
+  unique?: boolean;
+  indexed?: boolean;
+  items?: MongoFieldSchema;
+  properties?: Record<string, MongoFieldSchema>;
+}
+
+const MongoFieldSchemaSchema: z.ZodSchema<MongoFieldSchema> = z.object({
   type: z.union([
     z.literal("string"),
     z.literal("number"),
@@ -195,13 +204,11 @@ export const MongoFieldSchemaSchema: z.ZodType<any> = z.object({
   required: z.boolean().optional(),
   unique: z.boolean().optional(),
   indexed: z.boolean().optional(),
-  items: z.lazy(() => MongoFieldSchemaSchema).optional(),
-  properties: z.record(z.lazy(() => MongoFieldSchemaSchema)).optional(),
+  items: z.lazy((): z.ZodSchema<MongoFieldSchema> => MongoFieldSchemaSchema).optional(),
+  properties: z.record(z.lazy((): z.ZodSchema<MongoFieldSchema> => MongoFieldSchemaSchema)).optional(),
 });
 
-export type MongoFieldSchema = z.infer<typeof MongoFieldSchemaSchema>;
-
-export const MongoCollectionSchemaSchema = z.object({
+const MongoCollectionMetadataSchema = z.object({
   name: z.string(),
   fields: z.record(MongoFieldSchemaSchema),
   options: z
@@ -212,4 +219,34 @@ export const MongoCollectionSchemaSchema = z.object({
     .optional(),
 });
 
-export type MongoCollectionSchema = z.infer<typeof MongoCollectionSchemaSchema>;
+type MongoCollectionMetadata = z.infer<typeof MongoCollectionMetadataSchema>;
+
+// Export all schemas and types
+export {
+  MongoCollectionSchema,
+  MongoCollection,
+  MongoDocumentSchema,
+  MongoDocument,
+  MongoQueryOperatorSchema,
+  MongoQueryOperator,
+  MongoSortSchema,
+  MongoSort,
+  MongoQueryToolSchema,
+  MongoQueryTool,
+  MongoAggregateToolSchema,
+  MongoAggregateTool,
+  MongoCountToolSchema,
+  MongoCountTool,
+  MongoDistinctToolSchema,
+  MongoDistinctTool,
+  MongoCallToolRequestSchema,
+  MongoCallToolRequest,
+  MongoErrorCodeSchema,
+  MongoErrorCode,
+  MongoErrorSchema,
+  MongoError,
+  MongoFieldSchemaSchema,
+  MongoFieldSchema,
+  MongoCollectionMetadataSchema,
+  MongoCollectionMetadata,
+};
