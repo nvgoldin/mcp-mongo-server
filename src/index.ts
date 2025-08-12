@@ -7,6 +7,9 @@
  * - Reading collection schemas and contents
  * - Executing MongoDB queries via tools
  * - Providing collection summaries via prompts
+ *
+ * Note: This server is compatible with MongoDB driver 3.6.x and includes
+ * compatibility fixes for older MongoDB driver versions.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -77,31 +80,44 @@ async function connectToMongoDB(url: string, readOnly: boolean = false) {
     console.error("- URL starts with:", url.substring(0, 50) + "...");
     console.error("- Contains %2C:", url.includes("%2C"));
     console.error("- Contains comma:", url.includes(","));
-    
+
     // Try to decode the URL if it contains encoded characters
     let connectionUrl = url;
     if (url.includes("%2C")) {
       console.error("- Detected URL-encoded password, keeping as-is for MongoDB 3.6");
     }
-    
+
     const options: any = {
       useNewUrlParser: true,
       useUnifiedTopology: true,
       serverSelectionTimeoutMS: 10000 // 10 second timeout
     };
-    
+
     if (readOnly) {
       options.readPreference = ReadPreference.SECONDARY;
     }
-    
+
     console.error("- Creating MongoClient...");
     client = new MongoClient(connectionUrl, options);
-    
+
     console.error("- Connecting to MongoDB...");
     await client.connect();
-    
+
     console.error("- Connected successfully!");
-    db = client.db();
+
+    // Extract database name from connection URL
+    let databaseName = 'test'; // default fallback
+    try {
+      const urlObj = new URL(url);
+      if (urlObj.pathname && urlObj.pathname.length > 1) {
+        databaseName = urlObj.pathname.substring(1); // Remove leading slash
+      }
+    } catch (e) {
+      console.error("- Could not parse URL for database name, using default");
+    }
+
+    console.error("- Using database:", databaseName);
+    db = client.db(databaseName);
     isReadOnlyMode = readOnly;
     return true;
   } catch (error) {
@@ -1090,9 +1106,55 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { nameOnly, filter } = request.params.arguments || {};
 
       try {
+        // Debug logging
+        console.error("listCollections called with:", { nameOnly, filter });
+        console.error("Database object:", db ? "exists" : "null");
+        console.error("Database name:", db?.databaseName || "unknown");
+
         // Get the list of collections
-        const options = filter ? { filter } : {};
-        const collections = await db.listCollections(options).toArray();
+        const options: any = {};
+
+        // Only add filter if it's a valid object and not empty
+        if (filter && typeof filter === 'object' && filter !== null && !Array.isArray(filter) && Object.keys(filter).length > 0) {
+          // Validate that the filter contains valid MongoDB collection filter fields
+          const validFilterFields = ['name', 'type', 'options', 'info'];
+          const hasValidFields = Object.keys(filter).some(key => validFilterFields.includes(key));
+
+          if (hasValidFields) {
+            options.filter = filter;
+          } else {
+            console.warn('Invalid filter fields for listCollections, ignoring filter');
+          }
+        }
+
+        console.error("Calling db.listCollections with options:", options);
+
+        // MongoDB 3.6 compatibility fix
+        let collections;
+        try {
+          // For MongoDB 3.6, ensure options are properly formatted
+          if (Object.keys(options).length > 0) {
+            // MongoDB 3.6 requires specific format for listCollections options
+            const safeOptions = { ...options };
+            if (safeOptions.filter && typeof safeOptions.filter === 'object') {
+              // Ensure filter values are strings for MongoDB 3.6
+              Object.keys(safeOptions.filter).forEach(key => {
+                if (typeof safeOptions.filter[key] !== 'string') {
+                  safeOptions.filter[key] = String(safeOptions.filter[key]);
+                }
+              });
+            }
+            collections = await db.listCollections(safeOptions).toArray();
+          } else {
+            collections = await db.listCollections().toArray();
+          }
+        } catch (listError) {
+          console.error("listCollections failed, trying without options:", listError);
+          // Fallback: try without options for MongoDB 3.6 compatibility
+          collections = await db.listCollections().toArray();
+        }
+
+        console.error("Collections retrieved:", collections.length);
 
         // If nameOnly is true, return only the collection names
         const result = nameOnly
@@ -1108,6 +1170,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ],
         };
       } catch (error) {
+        console.error("listCollections error:", error);
         if (error instanceof Error) {
           throw new Error(`Failed to list collections: ${error.message}`);
         }
@@ -1277,12 +1340,12 @@ async function main() {
   console.error("Raw arguments:", args);
   console.error("Number of arguments:", args.length);
   console.error("Process argv:", process.argv);
-  
+
   // Parse command line arguments
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     console.error(`Arg[${i}]:`, arg, "Type:", typeof arg);
-    
+
     if (arg === "--read-only" || arg === "-r") {
       readOnlyMode = true;
     } else if (!connectionUrl && arg) {
